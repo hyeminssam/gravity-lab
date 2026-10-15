@@ -1017,6 +1017,8 @@ const TYPES = [
   {k:'diver', em:'🪂', name:'스카이다이버'}
 ];
 let type='ball', showArrow=true, showLines=false;
+/* 중력 화살표 길이: 무거운 물체일수록 지구가 더 세게 잡아당겨요 (가벼운 땀방울·물방울·낙엽은 짧게, 사람은 길게) */
+const ALEN={sweat:12, water:14, leaf:16, ball:30, ice:38, diver:78};
 let items=[];             // {th,type,t0,land,shirt}
 let highlight=null;       // 예측 확인용 강조
 const SHIRTS=['#ff8a3d','#4ecdc4','#ffd166','#c77dff','#06d6a0','#ef476f'];
@@ -1100,7 +1102,7 @@ function drawItem(it, now){
     ctx.restore();
     const tip={x:base.x-g.u.x*(2+46*grow), y:base.y-g.u.y*(2+46*grow)};
     it.pos=tip; if(grow>=1 && !it.land){ it.land=now; }
-    if(showArrow && grow>0.3) arrow(ctx, tip.x, tip.y, tip.x-g.u.x*40, tip.y-g.u.y*40, '#ff4d4d', 5);
+    if(showArrow && grow>0.3) arrow(ctx, tip.x, tip.y, tip.x-g.u.x*ALEN.ice, tip.y-g.u.y*ALEN.ice, '#ff4d4d', 5);
     return;
   }
   if(it.type==='water'){
@@ -1117,7 +1119,7 @@ function drawItem(it, now){
     it.pos={x:g.S.x+g.d.x*span*.45, y:g.S.y+g.d.y*span*.45};
     if(tt>.8 && !it.land) it.land=now;
     if(showArrow){ ctx.fillStyle='#66ccff'; ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(it.pos.x,it.pos.y,6,0,7); ctx.fill(); ctx.stroke();
-      arrow(ctx, it.pos.x, it.pos.y, it.pos.x+g.d.x*40, it.pos.y+g.d.y*40, '#ff4d4d', 5); }
+      arrow(ctx, it.pos.x, it.pos.y, it.pos.x+g.d.x*ALEN.water, it.pos.y+g.d.y*ALEN.water, '#ff4d4d', 4); }
     return;
   }
   const maxS = g.L - R - (it.type==='diver'?16:7);
@@ -1129,7 +1131,7 @@ function drawItem(it, now){
   else if(it.type==='sweat') emoji(ctx,'💧',p.x,p.y,20,it.th+Math.PI/2);
   else if(it.type==='leaf') emoji(ctx,'🍂',p.x,p.y,24,tt*2);
   else if(it.type==='diver') emoji(ctx,'🪂',p.x,p.y,40,it.th+Math.PI/2);
-  if(showArrow) arrow(ctx, p.x, p.y, p.x+g.d.x*42, p.y+g.d.y*42, '#ff4d4d', 5);
+  if(showArrow){ const L=ALEN[it.type]||30; arrow(ctx, p.x, p.y, p.x+g.d.x*L, p.y+g.d.y*L, '#ff4d4d', L<20?4:5); }
   if(isHL && it.land){ ctx.strokeStyle='#ffc857'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(p.x,p.y,24,0,7); ctx.stroke(); }
 }
 function frame(now){
@@ -1148,6 +1150,12 @@ function frame(now){
     ctx.strokeText('지구 중심',C.x+10,C.y+20); ctx.fillText('지구 중심',C.x+10,C.y+20);
   }
   items.forEach(it=>drawItem(it,now));
+  if(showArrow && items.length){
+    const lg='빨간 화살표 = 중력 · 무거운 물체일수록 화살표가 길어요';
+    ctx.font='bold 14px Pretendard,sans-serif'; const lw=ctx.measureText(lg).width+24;
+    ctx.fillStyle='#000b'; ctx.fillRect(10,10,lw,30);
+    ctx.fillStyle='#ff8080'; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(lg, 22, 25); ctx.textBaseline='alphabetic';
+  }
   if(!items.length){
     ctx.fillStyle='#ffffffcc'; ctx.font='bold 18px Pretendard,sans-serif'; ctx.textAlign='center';
     ctx.fillText('👆 지구 둘레 아무 곳이나 눌러 보세요', W/2, 36);
