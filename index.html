@@ -183,7 +183,9 @@ table.res th{color:var(--muted);font-weight:700}
 .nowplay .npc{background:#ffffff10;border-radius:999px;padding:3px 10px;font-weight:700;font-size:13px}.nowplay .npc small{color:var(--muted);font-weight:600}
 .livedot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 1.2s infinite}
 @keyframes pulse{50%{opacity:.35}}
-.rank .pl{font-size:12px;color:var(--ok);font-weight:800;margin-left:4px;white-space:nowrap}
+.rank .pl{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#03240f;background:var(--ok);font-weight:800;margin-left:6px;padding:2px 8px;border-radius:999px;white-space:nowrap;vertical-align:middle}
+.rank .pl i{width:7px;height:7px;border-radius:50%;background:#03240f;animation:pulse 1s infinite}
+#boardView .rank .pl{font-size:15px;padding:3px 11px}
 #boardView .nowplay .npc{font-size:17px}#boardView .nowplay .nph{font-size:18px}
 .rank .empty{color:var(--muted);font-size:14px;padding:10px 0}
 .rank.teacher li{cursor:pointer}
@@ -402,7 +404,7 @@ table.res th{color:var(--muted);font-weight:700}
     <h1 id="bTitle">🏆 중력 실험실 실시간 순위</h1>
     <span class="chip live" id="bLive">연결 중…</span>
     <select id="bCls"></select>
-    <span class="chip" id="bPlaying">🎮 지금 게임 중 0명</span>
+    <span class="chip" id="bPlaying">🎮 진행 중 0명</span>
     <span class="spacer"></span>
     <span class="join">참여 주소: <b id="bUrl"></b></span>
     <button class="btn sm" id="bFull">⛶ 전체 화면</button>
@@ -455,7 +457,7 @@ table.res th{color:var(--muted);font-weight:700}
 <div class="modal hidden" id="tModal"><div class="box">
   <h3>교사용</h3>
   <label for="tPw">비밀번호</label>
-  <input id="tPw" type="password" inputmode="numeric" autocomplete="off">
+  <input id="tPw" type="password" autocomplete="off">
   <div class="err" id="tErr"></div>
   <div class="row"><button class="btn ghost" id="tCancel">취소</button><button class="btn primary" id="tOk">확인</button></div>
 </div></div>
@@ -727,13 +729,18 @@ async function submitScore(game, score){
   if(PRACTICE){ practiceBest[game]=Math.max(practiceBest[game]||0, score); renderRanks(); return {ok:true, practice:true}; }
   if(!registered()) return {ok:false, msg:'입장 정보가 없어요'};
   for(let i=0;i<3;i++){
-    const {data,error} = await sb.rpc('grav_submit', {p_sid:me.sid, p_secret:me.secret, p_game:game, p_score:score});
+    if(!run || run.game!==game || !run.token){ if(!(await startRun(game))) return {ok:false, msg:'게임이 닫혀서 점수가 저장되지 않았어요.'}; }
+    const {data,error} = await sb.rpc('grav_submit', {p_sid:me.sid, p_secret:me.secret, p_game:game, p_score:score, p_token:run.token});
+    if(!error){ clearTimeout(run.timer); run=null; }
     if(!error){
       if(data && me.pkey!==data){ me.pkey=data; store.set('grav-me',me); }
       onScoreRow({game, pkey:data, cls:me.sid.slice(0,3), nick:me.nick, score, created_at:new Date().toISOString()});
       return {ok:true};
     }
-    if(/닫혀/.test(error.message||'')) return {ok:false, msg:'게임이 닫혀서 점수가 저장되지 않았어요.'};
+    const em=error.message||'';
+    if(/닫혀/.test(em)){ run=null; return {ok:false, msg:'게임이 닫혀서 점수가 저장되지 않았어요.'}; }
+    if(/이미 제출/.test(em)){ run=null; return {ok:false, msg:'이미 제출했어요. 처음 점수만 순위에 들어가요.'}; }
+    if(/너무 빨리|범위|기록이 없/.test(em)){ run=null; return {ok:false, msg:'이 판의 점수는 저장할 수 없어요.'}; }
     if(/등록 정보/.test(error.message||'')){ me={sid:me.sid,nick:me.nick,old:true}; store.set('grav-me',me); showMe(); return {ok:false, msg:'입장 정보가 바뀌었어요. 👤를 눌러 다시 입장하세요.'}; }
     await new Promise(r=>setTimeout(r,800*(i+1)));
   }
@@ -767,11 +774,11 @@ function makeRank(el, game, opt){
   opt=opt||{};
   const w = {el, game, top:opt.top||10, cls: null, big:!!opt.big, sel:opt.sel||null};
   if(!w.sel){
-    el.innerHTML = `<h3><span class="ttl">🏆 내 기록</span> <select aria-label="반 선택"></select></h3><div class="sub" style="color:var(--muted);font-size:13px"></div><div class="nowplay hidden"></div><ol></ol><div class="mine"></div>`;
+    el.innerHTML = `<h3><span class="ttl">🏆 내 기록</span> <select aria-label="반 선택"></select></h3><div class="sub" style="color:var(--muted);font-size:13px"></div><ol></ol><div class="mine"></div>`;
     w.sel = el.querySelector('select');
     w.sel.onchange=()=>{ w.cls=w.sel.value||null; store.set('grav-rcls-'+game, w.sel.value); renderRank(w); };
   } else {
-    el.innerHTML = `<h3>${GAME_NAME[game]}</h3><div class="nowplay hidden"></div><ol></ol>`;
+    el.innerHTML = `<h3>${GAME_NAME[game]}</h3><ol></ol>`;
   }
   rankWidgets.push(w); return w;
 }
@@ -816,19 +823,20 @@ function renderRank(w){
     if(mine) mine.textContent='Supabase를 연결하면 반 친구들과 실시간 순위가 나와요.';
     return;
   }
-  // 지금 게임 중인 학생 (교사 화면에서만 보여요)
-  const np=w.el.querySelector('.nowplay'), verb=w.game==='d2_quiz'?'푸는 중':'게임 중';
-  const nowP=[...LIVE.values()].filter(p=>p.game===w.game && (!w.cls||p.cls===w.cls)).sort((a,b)=>b.score-a.score);
-  if(np){ np.classList.toggle('hidden', !nowP.length);
-    np.innerHTML = nowP.length ? `<div class="nph"><span class="livedot"></span>지금 ${verb} <b>${nowP.length}명</b></div><div class="npl">${nowP.map(p=>`<span class="npc">🎮 ${esc(p.nick)} <small>${w.cls?'':clsName(p.cls).replace('학년 ','-').replace('반','')+' · '}${p.score.toLocaleString()}점</small></span>`).join('')}</div>` : ''; }
-  const playingKeys=new Set(nowP.map(p=>p.pkey));
-  const rows=sortedRows(w.game, w.cls);
+  // 진행 중인 학생: 닉네임 옆에 '진행 중', 지금 점수가 더 높으면 지금 점수로 순위에 넣어요
+  const verb=w.game==='d2_quiz'?'푸는 중':'진행 중';
+  const liveNow=new Map([...LIVE.values()].filter(p=>p.game===w.game && (!w.cls||p.cls===w.cls)).map(p=>[p.pkey,p]));
+  const rows=sortedRows(w.game, w.cls).map(r=>Object.assign({}, r));
+  liveNow.forEach((p,k)=>{ const r=rows.find(x=>x.pkey===k);
+    if(r){ r.live=p.score; } else rows.push({pkey:k, cls:p.cls, nick:p.nick, score:p.score, live:p.score, created_at:p.started_at}); });
+  rows.forEach(r=>{ r.show=Math.max(r.score, r.live!=null?r.live:-1); });
+  rows.sort((a,b)=> b.show-a.show || (a.created_at<b.created_at?-1:1));
   if(!rows.length){ ol.innerHTML=`<div class="empty">아직 기록이 없어요. 첫 번째 주인공이 되어 보세요!</div>`; if(mine) mine.textContent=''; return; }
   const myKey = me && me.pkey;
   ol.innerHTML = rows.slice(0,w.top).map((r,i)=>{
     const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':(i+1);
     const cls = ['g'+(i+1), r.pkey===myKey?'me':'', flashSet.has(r.pkey)?'flash':''].join(' ');
-    return `<li class="${cls}" data-pkey="${r.pkey}"><span class="r">${medal}</span><span class="n">${esc(r.nick)}${playingKeys.has(r.pkey)?` <span class="pl">🎮 ${verb}</span>`:''}</span>${w.cls?'':`<span class="c">${clsName(r.cls).replace('학년 ','-').replace('반','')}</span>`}<span class="s">${r.score.toLocaleString()}</span></li>`;
+    return `<li class="${cls}" data-pkey="${r.pkey}"><span class="r">${medal}</span><span class="n">${esc(r.nick)}${r.live!=null?` <span class="pl"><i></i>${verb}</span>`:''}</span>${w.cls?'':`<span class="c">${clsName(r.cls).replace('학년 ','-').replace('반','')}</span>`}<span class="s">${r.show.toLocaleString()}</span></li>`;
   }).join('');
   if(mine){
     if(myKey){ const idx=rows.findIndex(r=>r.pkey===myKey); mine.textContent = idx>=0 ? `내 순위: ${idx+1}위 / ${rows.length}명 · 최고 ${rows[idx].score.toLocaleString()}점` : (w.cls?'이 반 목록에는 내 기록이 없어요.':''); }
@@ -838,7 +846,7 @@ function renderRank(w){
 }
 let renderT=null;
 function renderRanks(now){
-  const go=()=>{ renderT=null;
+  const go=()=>{ renderT=null; if(PRACTICE) LIVE.clear();
     rankWidgets.forEach(w=>{ if(w.el.querySelector('h3 select')) w.cls = fillClassSelect(w.sel, store.get('grav-rcls-'+w.game, me?me.sid.slice(0,3):'')); });
     if(!$('boardView').classList.contains('hidden')) boardCls = fillClassSelect($('bCls'), store.get('grav-bcls',''));
     rankWidgets.forEach(w=>{ if(!w.el.querySelector('h3 select')){ w.cls=boardCls; w.el.classList.toggle('hidden', tabDay(w.game)!==day); } renderRank(w); });
@@ -999,7 +1007,6 @@ function connect(){
       if(st==='SUBSCRIBED'){ setLive(true,'실시간 연결됨'); loadTabs(); loadBest(); refreshMe(); }
       else if(st==='CHANNEL_ERROR'||st==='TIMED_OUT'||st==='CLOSED') setLive(false,'다시 연결 중…');
     });
-  setupPresence();
   loadTabs(); loadBest();
   setInterval(()=>{ loadTabs(); }, 8000);
   setInterval(()=>{ loadBest(); }, 30000);
@@ -1007,30 +1014,46 @@ function connect(){
   if(reqToken) pollReq();
 }
 
-/* ================= 지금 게임 중 (Realtime Presence) ================= */
-const LIVE = new Map();
-let pch=null, myLive=null, liveSent=0, liveT=null;
-function setupPresence(){
-  pch = sb.channel('grav-presence', {config:{presence:{key:'t'+Math.random().toString(36).slice(2)}}});
-  pch.on('presence',{event:'sync'},()=>{
-    LIVE.clear(); const st=pch.presenceState();
-    Object.values(st).forEach(arr=>arr.forEach(p=>{ if(p && p.game && p.pkey) LIVE.set(p.pkey+'|'+p.game, p); }));
-    $('bPlaying').textContent = (()=>{ const n=[...LIVE.values()].filter(p=>tabDay(p.game)===day).length; return n?`🎮 지금 게임 중 ${n}명`:'🎮 지금 게임 중 0명'; })();
-    if(teacherPw || !$('boardView').classList.contains('hidden')) renderRanks();
-  }).subscribe(s=>{ if(s==='SUBSCRIBED' && myLive) pch.track(myLive).catch(()=>{}); });
+/* ================= 게임 한 판(세션) · 지금 진행 중 ================= */
+let run=null;   // {game, token, sent, timer, score}
+async function startRun(game){
+  if(PRACTICE){ run={game, token:null}; return true; }
+  if(!registered()) return false;
+  const {data,error}=await sb.rpc('grav_start',{p_sid:me.sid, p_secret:me.secret, p_game:game});
+  if(error){
+    const m=error.message||'';
+    if(/닫혀/.test(m)) toast('🔒 게임이 닫혀 있어요');
+    else if(/등록 정보/.test(m)){ me={sid:me.sid,nick:me.nick,old:true}; store.set('grav-me',me); showMe(); toast('입장 정보가 바뀌었어요. 👤를 눌러 다시 입장하세요'); }
+    else toast('게임을 시작하지 못했어요. 인터넷을 확인하고 다시 해 보세요');
+    return false;
+  }
+  run={game, token:data, sent:0, timer:null, score:0}; return true;
 }
+function sendProgress(){ if(!run||!run.token) return; run.sent=Date.now(); sb.rpc('grav_progress',{p_token:run.token, p_score:run.score||0}).then(()=>{},()=>{}); }
 function live(game, score){
-  if(PRACTICE || !pch || !registered()) return;
-  clearTimeout(liveT);
-  if(!game){ if(myLive){ myLive=null; pch.untrack().catch(()=>{}); } return; }
-  const fresh = !myLive || myLive.game!==game;
-  myLive={pkey:me.pkey, nick:me.nick, cls:me.sid.slice(0,3), game, score:Math.max(0,Math.round(score||0))};
-  const send=()=>{ liveSent=Date.now(); if(myLive) pch.track(myLive).catch(()=>{}); };
-  if(fresh || Date.now()-liveSent>1500) send(); else liveT=setTimeout(send, 1500-(Date.now()-liveSent));
+  if(PRACTICE || !run || !run.token) return;
+  if(!game){ const t=run.token; clearTimeout(run.timer); run=null; sb.rpc('grav_end',{p_token:t}).then(()=>{},()=>{}); return; }
+  if(run.game!==game) return;
+  run.score=Math.max(0,Math.round(score||0)); clearTimeout(run.timer);
+  const wait=2000-(Date.now()-run.sent);
+  if(wait<=0) sendProgress(); else run.timer=setTimeout(sendProgress, wait);
 }
+setInterval(()=>{ if(run && run.token && Date.now()-run.sent>10000) sendProgress(); }, 5000);   // 점수가 안 바뀌어도 '진행 중' 유지
+
+/* 교사 화면: 2초마다 진행 중인 학생 불러오기 */
+const LIVE = new Map();
+async function loadLive(){
+  if(!teacherPw || PRACTICE) return;
+  const {data,error}=await sb.rpc('grav_live_list',{p_pw:teacherPw}); if(error) return;
+  LIVE.clear(); (data||[]).forEach(p=>LIVE.set(p.pkey+'|'+p.game, p));
+  const n=[...LIVE.values()].filter(p=>tabDay(p.game)===day).length;
+  $('bPlaying').textContent = `🎮 진행 중 ${n}명`;
+  renderRanks();
+}
+setInterval(loadLive, 2000);
 
 /* 공개 */
-window.G = {live,PRACTICE, PLANETS, dotHTML, setupCanvas, arrow, rrect, person, emoji, stars, drawStars,
+window.G = {live, startRun,PRACTICE, PLANETS, dotHTML, setupCanvas, arrow, rrect, person, emoji, stars, drawStars,
   $, esc, clamp, rand, pick, toast, store, GAMES, isOpen, canSee, refreshGates, ensureMe, submitScore,
   makeRank, renderRanks, isTeacher:()=>!!teacherPw, me:()=>me, get day(){return day;}, get active(){return active;}};
 window.__gravInit = function(){
@@ -1671,13 +1694,15 @@ async function start(){
   if(!(G.isOpen(K)||G.isTeacher())) return;
   const who = await G.ensureMe(); if(!who) return;
   if(!(G.isOpen(K)||G.isTeacher())) return;
+  if(st.starting) return; st.starting=true;
+  const okRun = await G.startRun(K); st.starting=false; if(!okRun) return;
   Object.assign(st,{running:true, closeAfter:false, ended:false, t0:performance.now(), score:0, combo:0, n:0, right:0, lock:false, saveMsg:'', oxUsed:[]});
   over.classList.add('hidden'); G.refreshGates(); hud(); next();
-  st.lastTick=null; G.sfx('start'); G.bgm.start('space'); G.live(K,0);
+  st.lastTick=null; G.sfx('start'); G.bgm.start('space');
 }
 async function end(){
   st.running=false; st.ended=true; st.q=null;
-  G.bgm.stop(); G.sfx('end'); G.live(null);
+  G.bgm.stop(); G.sfx('end');
   $('g1A').innerHTML=''; $('g1Q').textContent='';
   st.saveMsg='점수 저장 중…'; showStart();
   const r = await G.submitScore(K, st.score);
@@ -1841,13 +1866,15 @@ async function start(){
   if(!(G.isOpen(K)||G.isTeacher())) return;
   const who=await G.ensureMe(); if(!who) return;
   if(!(G.isOpen(K)||G.isTeacher())) return;
+  if(st.starting) return; st.starting=true;
+  const okRun = await G.startRun(K); st.starting=false; if(!okRun) return;
   Object.assign(st,{running:true, closeAfter:false, ended:false, t0:performance.now(), score:0, combo:0, maxCombo:0, caught:0, items:[], pops:[], stage:-1, nextSpawn:0, pauseUntil:0, saveMsg:''});
   over.classList.add('hidden'); G.refreshGates();
-  st.lastTick=null; G.sfx('start'); G.bgm.start('catcher'); G.live(K,0);
+  st.lastTick=null; G.sfx('start'); G.bgm.start('catcher');
 }
 async function end(){
   st.running=false; st.ended=true; st.items=[]; banner.classList.add('hidden');
-  G.bgm.stop(); G.sfx('end'); G.live(null);
+  G.bgm.stop(); G.sfx('end');
   st.saveMsg='점수 저장 중…'; showStart();
   const r=await G.submitScore(K, st.score);
   st.saveMsg = r.ok ? (r.practice?'연습 모드(순위 저장 안 됨)':'✅ 순위에 저장했어요') : ('⚠️ '+r.msg);
@@ -2214,7 +2241,7 @@ function draw(){
     box.innerHTML=`<div style="text-align:center;padding:30px 10px"><div style="font-size:56px">✏️</div><h2 style="margin:6px 0">무게와 질량 계산 연습</h2>
       <p style="color:var(--muted);line-height:1.7">모두 같은 ${Q.length}문제예요. 답은 <b>숫자</b>를 쓰고 <b>단위</b>(kg · N · g)를 골라요.<br>처음에 맞히면 100점, 두 번째 60점, 세 번째 30점. 세 번 틀리면 정답을 보여 줘요.<br>1번은 <b>교과서에 먼저 풀고</b> 입력해요.</p>
       <button class="btn warm" id="qStart" style="font-size:19px;padding:13px 30px">▶ 시작하기</button></div>`;
-    $('qStart').onclick=async()=>{ const me=await G.ensureMe(); if(!me) return; load(); S.started=true; save(); draw(); G.renderRanks(true); G.sfx('start'); G.live(K, total()); };
+    $('qStart').onclick=async()=>{ const me=await G.ensureMe(); if(!me) return; load(); S.started=true; save(); draw(); G.renderRanks(true); G.sfx('start'); G.startRun(K); };
     return;
   }
   if(S.finished) return drawEnd();
@@ -2273,7 +2300,7 @@ function check(){
 }
 async function finish(){
   if(Q.some((_,j)=>!qDone(j))){ S.cur=Q.findIndex((_,j)=>!qDone(j)); save(); draw(); return toast('아직 안 푼 문제가 있어요'); }
-  S.finished=true; save(); drawEnd(); G.sfx('end'); G.live(null);
+  S.finished=true; save(); drawEnd(); G.sfx('end');
   if(!S.submitted){
     const r=await G.submitScore(K, total());
     S.saveMsg = r.ok ? (r.practice?'연습 모드(순위 저장 안 됨)':'✅ 점수를 저장했어요') : '⚠️ '+r.msg;
@@ -2292,7 +2319,8 @@ function drawEnd(){
   $('qRetry').onclick=()=>{ const sub=S.submitted, msg=S.saveMsg; S=fresh(); S.started=true; S.submitted=sub; S.saveMsg=msg; save(); draw(); };
 }
 window.addEventListener('grav-me',()=>{ load(); draw(); });
-window.addEventListener('grav-tab',e=>{ if(e.detail===K && S && S.started && !S.finished) G.live(K,total()); else if(e.detail!==K && !Object.values(G.GAMES).some(g=>g.running)) G.live(null); });
+let resumed=false;
+window.addEventListener('grav-tab',e=>{ if(e.detail===K && S && S.started && !S.finished && !resumed){ resumed=true; G.startRun(K).then(ok=>{ if(ok) G.live(K,total()); }); } });
 draw();
 })();
 
@@ -2338,12 +2366,14 @@ async function start(){
   if(!(G.isOpen(K)||G.isTeacher())) return;
   const who=await G.ensureMe(); if(!who) return;
   if(!(G.isOpen(K)||G.isTeacher())) return;
+  if(st.starting) return; st.starting=true;
+  const okRun = await G.startRun(K); st.starting=false; if(!okRun) return;
   Object.assign(st,{running:true, closeAfter:false, ended:false, t0:performance.now(), score:0, combo:0, n:0, right:0, lock:false, used:[], saveMsg:''});
   over.classList.add('hidden'); G.refreshGates(); hud(); next();
-  st.lastTick=null; G.sfx('start'); G.bgm.start('quiz'); G.live(K,0);
+  st.lastTick=null; G.sfx('start'); G.bgm.start('quiz');
 }
 async function end(){
-  st.running=false; st.ended=true; st.q=null; G.bgm.stop(); G.sfx('end'); G.live(null); $('g3A').innerHTML=''; $('g3Q').textContent='';
+  st.running=false; st.ended=true; st.q=null; G.bgm.stop(); G.sfx('end'); $('g3A').innerHTML=''; $('g3Q').textContent='';
   st.saveMsg='점수 저장 중…'; showStart();
   const r=await G.submitScore(K, st.score);
   st.saveMsg = r.ok ? (r.practice?'연습 모드(순위 저장 안 됨)':'✅ 순위에 저장했어요') : ('⚠️ '+r.msg);
